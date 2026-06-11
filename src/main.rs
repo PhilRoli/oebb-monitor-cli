@@ -962,9 +962,7 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
                             Span::raw("  Wagen "),
                             Span::styled(
                                 wagon
-                                    .wagon_number
-                                    .as_ref()
-                                    .map(|s| s.as_str())
+                                    .wagon_number.as_deref()
                                     .unwrap_or("?"),
                                 Style::default().fg(Color::Yellow),
                             ),
