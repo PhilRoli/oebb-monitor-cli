@@ -35,7 +35,8 @@ pub struct TrainItem {
 }
 
 /// One wagon (or the locomotive) in a train's physical composition, including
-/// its position sector and onboard amenity icons.
+/// its position sector, onboard amenity icons, and car type (which matters for
+/// night trains: sleeper vs. couchette vs. seated).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Formation {
     /// `None` marks the locomotive; otherwise the printed wagon number.
@@ -44,6 +45,15 @@ pub struct Formation {
     pub icons: Option<Vec<String>>,
     pub sector: Option<String>,
     pub destination: Option<String>,
+    /// Car category, e.g. `engine`, `sleeper`, `couchette`, `passenger`,
+    /// `car` (car-carrier), `restaurant`.
+    #[serde(rename = "type")]
+    pub car_type: Option<Vec<String>>,
+    /// Whether the wagon is closed / not boardable.
+    pub closed: Option<bool>,
+    /// Layout code encoding the passenger class, e.g. `W_1`, `W_2`, `W_1_B`
+    /// (1st + Business), `W_C_1` (Comfort + 1st), `TW_B_1`. Decoded by the UI.
+    pub symbol: Option<String>,
 }
 
 /// A free-text remark attached to a train (delays, cancellations, etc.).

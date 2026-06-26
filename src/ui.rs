@@ -14,6 +14,40 @@ use ratatui::{
 
 use crate::app::{calculate_delay, format_time, App, AppMode, ConnectionState, ContentType};
 
+/// Human-readable label for a notable wagon car type (e.g. night-train cars),
+/// or `None` for ordinary/unknown types.
+fn car_type_label(types: &[String]) -> Option<&'static str> {
+    types.iter().find_map(|t| match t.as_str() {
+        // Bed and fork/plate need a U+FE0F variation selector so they render
+        // full-width; the others are already emoji-presentation.
+        "sleeper" => Some("🛏️ Schlafwagen"),
+        "couchette" => Some("🛌 Liegewagen"),
+        "passenger" => Some("🪑 Sitzwagen"),
+        "car" => Some("🚗 Autotransport"),
+        "restaurant" => Some("🍽️ Restaurant"),
+        _ => None,
+    })
+}
+
+/// Decode the passenger class(es) from a wagon's `symbol` code, e.g.
+/// `W_1` → "1. Klasse", `W_1_B` → "1. Klasse + Business",
+/// `W_C_1` → "Comfort + 1. Klasse". Returns `None` for symbols that carry no
+/// class (locomotives, sleepers, couchettes, car-carriers — covered by `type`).
+fn class_label(symbol: &str) -> Option<String> {
+    let parts: Vec<&str> = symbol
+        .split('_')
+        .skip(1) // drop the vehicle prefix (W / TW / L)
+        .filter_map(|seg| match seg {
+            "1" => Some("1. Klasse"),
+            "2" => Some("2. Klasse"),
+            "B" => Some("Business"),
+            "C" => Some("Comfort"),
+            _ => None,
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" + "))
+}
+
 /// Map a delay (minutes) to its colour: green on time, yellow up to 5 min late,
 /// red beyond that.
 fn delay_color(delay: i64) -> Color {
@@ -514,7 +548,12 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
                 )));
 
                 for wagon in formation {
-                    let is_locomotive = wagon.wagon_number.is_none();
+                    let is_locomotive = wagon
+                        .car_type
+                        .as_deref()
+                        .map(|t| t.iter().any(|c| c == "engine"))
+                        .unwrap_or(false)
+                        || wagon.wagon_number.is_none();
                     let mut wagon_line = if is_locomotive {
                         vec![Span::styled(
                             "  🚂 Lokomotive",
@@ -529,6 +568,31 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
                             ),
                         ]
                     };
+
+                    // Car type (sleeper / couchette / seated / restaurant) and
+                    // passenger class (1./2. Klasse, Business, Comfort) — most
+                    // relevant for night and long-distance trains.
+                    if !is_locomotive {
+                        if let Some(label) = wagon.car_type.as_deref().and_then(car_type_label) {
+                            wagon_line.push(Span::styled(
+                                format!(" {}", label),
+                                Style::default().fg(Color::Blue),
+                            ));
+                        }
+                        if let Some(class) = wagon.symbol.as_deref().and_then(class_label) {
+                            wagon_line.push(Span::styled(
+                                format!(" · {}", class),
+                                Style::default().fg(Color::Green),
+                            ));
+                        }
+                    }
+
+                    if wagon.closed == Some(true) {
+                        wagon_line.push(Span::styled(
+                            " (geschlossen)",
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
 
                     if let Some(sector) = &wagon.sector {
                         wagon_line.push(Span::styled(
@@ -628,5 +692,28 @@ mod tests {
         assert_eq!(delay_color(3), Color::Yellow);
         assert_eq!(delay_color(5), Color::Yellow);
         assert_eq!(delay_color(6), Color::Red);
+    }
+
+    #[test]
+    fn car_types() {
+        let t = |s: &str| car_type_label(&[s.to_string()]);
+        assert_eq!(t("sleeper"), Some("🛏️ Schlafwagen"));
+        assert_eq!(t("restaurant"), Some("🍽️ Restaurant"));
+        assert_eq!(t("car"), Some("🚗 Autotransport"));
+        assert_eq!(t("unknown"), None);
+    }
+
+    #[test]
+    fn class_labels() {
+        assert_eq!(class_label("W_1").as_deref(), Some("1. Klasse"));
+        assert_eq!(class_label("W_2").as_deref(), Some("2. Klasse"));
+        assert_eq!(class_label("W_1_B").as_deref(), Some("1. Klasse + Business"));
+        assert_eq!(class_label("W_C_1").as_deref(), Some("Comfort + 1. Klasse"));
+        assert_eq!(class_label("TW_B_1").as_deref(), Some("Business + 1. Klasse"));
+        // Restaurant section (S) carries no passenger class of its own.
+        assert_eq!(class_label("W_1_S").as_deref(), Some("1. Klasse"));
+        // Sleepers/couchettes/locos have no class code.
+        assert_eq!(class_label("W_Schlaf"), None);
+        assert_eq!(class_label("L_L"), None);
     }
 }
