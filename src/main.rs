@@ -1079,6 +1079,11 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     debug!("Application starting");
     debug!("Debug mode: {}", DEBUG.enabled);
 
