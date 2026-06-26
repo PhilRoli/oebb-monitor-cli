@@ -1,261 +1,107 @@
-# ÖBB Monitor 🚂
+# ÖBB Monitor
 
-Ein modernes Terminal User Interface (TUI) zur Anzeige von Echtzeit-Abfahrts- und Ankunftsdaten der Österreichischen Bundesbahnen (ÖBB).
-
-## Features
-
-- 🚉 **844 österreichische Bahnhöfe** - Wechseln Sie zwischen allen ÖBB-Stationen
-- 📊 **Live-Updates** - Echtzeit-Daten über WebSocket-Verbindung
-- 📄 **Mehrere Seiten** - Lädt bis zu 5 Seiten parallel für mehr Züge
-- ⏱️ **Verspätungsanzeige** - Farbcodierte Darstellung von Verspätungen
-  - Grün: Pünktlich
-  - Gelb: Verspätung bis 5 Minuten
-  - Rot: Verspätung über 5 Minuten
-- 🔄 **Abfahrt/Ankunft** - Einfacher Wechsel zwischen beiden Ansichten
-- 🔍 **Station suchen** - Interaktive Stationsauswahl mit Suchfunktion
-- 🎨 **Schöne TUI** - Erstellt mit [Ratatui](https://ratatui.rs/)
-- 📍 **Gleis & Sektor** - Anzeige von Gleis und Bahnsteigabschnitt
-- 💬 **Hinweise** - Wichtige Informationen und Baustellenmeldungen
-- 🚂 **Zug-Details** - Detailansicht mit:
-  - 🗺️ Alle Zwischenhalte
-  - 🚃 Zugformation (Wagennummern)
-  - 📶 Ausstattung (WLAN, Fahrrad, Rollstuhl, Bistro)
-  - 👔 Betreiber-Information
+Terminal UI for live ÖBB (Austrian Federal Railways) departure and arrival data, streamed via WebSocket.
 
 ## Installation
 
-### Voraussetzungen
-
-- Rust (1.70+)
-- Cargo
-
-Falls Rust noch nicht installiert ist:
+### Homebrew
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+brew tap philroli/oebb-monitor
+brew install oebb-monitor
 ```
 
-### Schnellinstallation
+### Build from source
+
+Requires Rust 1.80+:
 
 ```bash
-cd oebb-monitor
-./install.sh
-```
-
-Das Script:
-
-- Kompiliert das Programm im Release-Modus
-- Installiert es nach `~/.cargo/bin/oebb-monitor`
-- Prüft ob `~/.cargo/bin` im PATH ist
-
-### Manuelle Installation
-
-```bash
+git clone https://github.com/philroli/oebb-monitor
 cd oebb-monitor
 cargo install --path .
 ```
 
-### Nach der Installation
-
-Das Programm ist nun systemweit verfügbar:
+Or use the included helper:
 
 ```bash
-# Normal starten
-oebb-monitor
-
-# Mit Debug-Logging
-oebb-monitor --debug
+./install.sh
 ```
 
-### Deinstallation
+## Usage
 
 ```bash
-cargo uninstall oebb-monitor
+oebb-monitor            # start at Wien Westbahnhof (default)
+oebb-monitor --version  # print version
+oebb-monitor --debug    # write debug log to /tmp/oebb-debug.log
 ```
 
-### PATH-Konfiguration
+### Keybindings
 
-Falls `oebb-monitor: command not found` erscheint, füge `~/.cargo/bin` zum PATH hinzu:
+#### Main view
 
-**Zsh (macOS Standard):**
+| Key | Action |
+| --- | --- |
+| `1`–`9`, `0` | Open detail for trains 1–10 |
+| `↑` / `↓` | Move selection |
+| `Enter` | Open detail view |
+| `A` | Switch to arrivals |
+| `D` | Switch to departures |
+| `S` | Search / change station |
+| `R` | Reconnect and refresh |
+| `Q` | Quit |
 
-```bash
-echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-```
+#### Detail view
 
-**Bash:**
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | Previous / next train |
+| `PgUp` / `PgDn` | Scroll content |
+| `Esc` / `Q` | Close |
 
-```bash
-echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
+#### Station search
+
+| Key | Action |
+| --- | --- |
+| Type | Filter by name |
+| `↑` / `↓` | Navigate results |
+| `Enter` | Select station |
+| `Esc` | Cancel |
+
+## Features
+
+- Live departures and arrivals for all 844 ÖBB stations
+- Delay indicator with colour coding: on time (green), up to 5 min late (yellow), over 5 min late (red)
+- Train detail view: intermediate stops, formation with wagon amenities (Wi-Fi, bicycle, wheelchair, bistro), operator, remarks
+- Data stays live regardless of which mode is active (detail view, station search)
+- Parallel loading across 5 WebSocket pages for full coverage
+- Terminal cleaned up automatically on panic
 
 ## Debugging
 
-If you experience issues (e.g., station switching not working), enable debug mode:
-
 ```bash
-# Run with debug flag
-cargo run --release -- --debug
-
-# Or use the helper script
-./run-debug.sh
-
-# In another terminal, watch the debug log
+oebb-monitor --debug
+# in a second terminal:
 tail -f /tmp/oebb-debug.log
 ```
 
-The debug log shows:
+The log captures WebSocket events, reconnect signals, item merges, and key input.
 
-- WebSocket connection attempts and results
-- Data received from each page
-- Reconnect signals when station/mode changes
-- Item count changes and merging
-- All user interactions (key presses, station selection)
+## Architecture
 
-Debug output is written to `/tmp/oebb-debug.log`
+Single-binary Rust application (~1100 lines, `src/main.rs`).
 
-## Build
+| Crate | Version | Purpose |
+| --- | --- | --- |
+| ratatui | 0.30 | TUI framework |
+| crossterm | 0.29 | Terminal backend |
+| tokio | 1 | Async runtime |
+| tokio-tungstenite | 0.29 | WebSocket client |
+| serde / serde_json | 1 | JSON deserialisation |
+| chrono | 0.4 | Time formatting |
+| anyhow | 1 | Error handling |
 
-### Voraussetzungen
+Data source: `wss://meine.oebb.at/abfahrtankunft/webdisplay/web_client/ws/`
 
-- Rust (1.70+)
-- Cargo
+## License
 
-## Build
-
-Für Entwicklung:
-
-### Voraussetzungen
-
-- Rust (1.70+)
-- Cargo
-
-### Build
-
-```bash
-cd oebb-monitor
-cargo build --release
-```
-
-### Run
-
-```bash
-cargo run --release
-```
-
-Oder das kompilierte Binary direkt starten:
-
-```bash
-./target/release/oebb-tui
-```
-
-## Bedienung
-
-### Hauptansicht
-
-- **1-9** - Zug 1-9 auswählen (direkt)
-- **↑/↓** - Zug auswählen (navigieren)
-- **Enter** - Detailansicht des ausgewählten Zugs öffnen
-- **A** - Wechsel zu **A**nkünften
-- **D** - Wechsel zu Abfahrten (**D**epartures)
-- **S** - **S**tation auswählen
-- **Q** - Programm beenden (**Q**uit)
-
-### Detailansicht
-
-- **↑/↓** - Vorheriger/Nächster Zug
-- **Esc** - Zurück zur Hauptansicht
-
-### Stationsauswahl
-
-- **Tippen** - Station suchen (Filtern nach Name)
-- **↑/↓** - In der Liste navigieren
-- **Enter** - Station auswählen
-- **Esc** - Abbrechen
-
-## Technische Details
-
-### Architektur
-
-- **Async Runtime**: Tokio
-- **WebSocket Client**: tokio-tungstenite mit native-tls
-- **TUI Framework**: Ratatui 0.29
-- **Terminal Backend**: Crossterm 0.28
-- **Multi-Page Loading**: 5 parallele WebSocket-Verbindungen für maximale Datenabdeckung
-
-### Datenquelle
-
-Das Programm verbindet sich mit der offiziellen ÖBB WebSocket API:
-
-```txt
-wss://meine.oebb.at/abfahrtankunft/webdisplay/web_client/ws/
-```
-
-### Projekt-Struktur
-
-```txt
-oebb-monitor/
-├── src/
-│   └── main.rs          # Hauptprogramm (TUI + WebSocket)
-├── stations.json        # Liste aller 844 ÖBB-Stationen
-├── Cargo.toml           # Dependencies
-└── README.md            # Diese Datei
-```
-
-## Python-Version
-
-Im Projekt ist auch eine funktionsfähige Python-Version enthalten:
-
-```bash
-# Virtual Environment aktivieren
-source venv/bin/activate
-
-# Python-Version starten
-python oebb-departures.py
-```
-
-Die Python-Version bietet die gleichen Features, ist aber weniger performant als die Rust-Version.
-
-## Dependencies
-
-```toml
-ratatui = "0.29"          # TUI Framework
-crossterm = "0.28"         # Terminal Manipulation
-tokio = "1"                # Async Runtime
-tokio-tungstenite = "0.24" # WebSocket Client
-serde = "1.0"              # Serialization
-serde_json = "1.0"         # JSON Parsing
-futures-util = "0.3"       # Async Utilities
-chrono = "0.4"             # DateTime Handling
-anyhow = "1.0"             # Error Handling
-```
-
-## Screenshots
-
-```txt
-┌─────────────────────────────────────────────────────────────┐
-│              🚂 ABFAHRTEN - Wien Westbahnhof                │
-└─────────────────────────────────────────────────────────────┘
-┌Züge─────────────────────────────────────────────────────────┐
-│ZEIT  IST   VERSP.  ZUG    LINIE   ZIEL              GLEIS   │
-│03:23 03:25 +2      1600   REX51   St.Pölten Hbf     5       │
-│03:48 -     -       9120   CJX5    Kleinreifling     3       │
-│...                                                           │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Lizenz
-
-MIT License
-
-## Autor
-
-Erstellt für die Überwachung der ÖBB-Züge in Echtzeit.
-
-## Hinweise
-
-- Die App benötigt eine aktive Internetverbindung
-- WebSocket-Verbindung wird automatisch neu aufgebaut bei Unterbrechungen
-- Daten werden direkt von der offiziellen ÖBB-API bezogen
+MIT
