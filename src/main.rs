@@ -900,6 +900,21 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
             ]));
         }
 
+        if let Some(remarks) = &train.remarks {
+            if !remarks.is_empty() {
+                content_lines.push(Line::from(Span::styled(
+                    "Bemerkungen:",
+                    Style::default().fg(Color::Yellow),
+                )));
+                for remark in remarks {
+                    content_lines.push(Line::from(Span::styled(
+                        format!("{}", remark.text.default),
+                        Style::default().fg(Color::Red),
+                    )));
+                }
+            }
+        }
+
         content_lines.push(Line::from(""));
 
         if let Some(via) = &train.via {
