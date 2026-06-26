@@ -136,7 +136,9 @@ fn render_main(f: &mut Frame, app: &mut App) {
             .remarks
             .as_ref()
             .and_then(|r| r.first())
-            .map(|r| r.text.default.clone())
+            // Remark text can contain embedded newlines; flatten to a space so
+            // it stays on the single-height table row.
+            .map(|r| r.text.default.replace('\n', " "))
             .unwrap_or_default();
 
         let number_str = match idx {
@@ -453,10 +455,15 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
                     Style::default().fg(Color::Yellow),
                 )));
                 for remark in remarks {
-                    content_lines.push(Line::from(Span::styled(
-                        remark.text.default.clone(),
-                        Style::default().fg(Color::Red),
-                    )));
+                    // A single remark may carry embedded newlines (e.g.
+                    // "Kurzzug\nSektor B einsteigen"); render each as its own
+                    // line since ratatui does not split them within a Line.
+                    for line in remark.text.default.split('\n') {
+                        content_lines.push(Line::from(Span::styled(
+                            line.to_string(),
+                            Style::default().fg(Color::Red),
+                        )));
+                    }
                 }
             }
         }
