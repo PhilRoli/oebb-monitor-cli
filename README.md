@@ -21,12 +21,6 @@ cd oebb-monitor
 cargo install --path .
 ```
 
-Or use the included helper:
-
-```bash
-./install.sh
-```
-
 ## Usage
 
 ```bash
