@@ -162,8 +162,7 @@ pub async fn run_websocket(
                             failed_count += 1;
                             if failed_count >= max_pages && !connected_any {
                                 debug!("All {} pages failed to connect", max_pages);
-                                app.lock().await.connection =
-                                    ConnectionState::Failed("Verbindung fehlgeschlagen".to_string());
+                                app.lock().await.connection = ConnectionState::Failed;
                                 notify.notify_one();
                             }
                         }

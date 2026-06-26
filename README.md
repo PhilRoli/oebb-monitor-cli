@@ -42,6 +42,7 @@ oebb-monitor --debug    # write debug log to /tmp/oebb-debug.log
 | `D` | Switch to departures |
 | `S` | Search / change station |
 | `R` | Reconnect and refresh |
+| `L` | Toggle language (German / English) |
 | `Q` | Quit |
 
 #### Detail view
@@ -50,6 +51,7 @@ oebb-monitor --debug    # write debug log to /tmp/oebb-debug.log
 | --- | --- |
 | `↑` / `↓` | Previous / next train |
 | `PgUp` / `PgDn` | Scroll content |
+| `L` | Toggle language (German / English) |
 | `Esc` / `Q` | Close |
 
 #### Station search
@@ -66,9 +68,12 @@ oebb-monitor --debug    # write debug log to /tmp/oebb-debug.log
 - Live departures and arrivals for all 844 ÖBB stations
 - Delay indicator with colour coding: on time (green), up to 5 min late (yellow), over 5 min late (red)
 - Train detail view: intermediate stops, formation with wagon amenities (Wi-Fi, bicycle, wheelchair, bistro), operator, remarks
+- German / English UI, toggled live with `L`; auto-detected from your locale on first run and remembered in `~/.config/oebb-monitor/config`
 - Data stays live regardless of which mode is active (detail view, station search)
 - Parallel loading across 5 WebSocket pages for full coverage
 - Terminal cleaned up automatically on panic
+
+Note: live feed text (station names, destinations, remarks, notices) is provided by ÖBB in German only and is shown as-is in both UI languages.
 
 ## Debugging
 
@@ -91,6 +96,8 @@ Single-binary Rust application, split into focused modules under `src/`:
 | `model.rs` | Serde types for the WebSocket JSON payloads |
 | `ws.rs` | Background task maintaining the live connection |
 | `ui.rs` | All terminal rendering |
+| `lang.rs` | German/English UI strings and the language toggle |
+| `config.rs` | Persisted settings (the chosen language) |
 | `debug.rs` | Opt-in file logger and the `debug!` macro |
 
 | Crate | Version | Purpose |

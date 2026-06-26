@@ -9,6 +9,7 @@ use chrono::{DateTime, Local};
 use ratatui::widgets::ListState;
 use std::collections::HashMap;
 
+use crate::lang::Lang;
 use crate::model::{SpecialNotice, TrainItem};
 
 /// Which board to display: departures or arrivals.
@@ -31,8 +32,8 @@ pub enum AppMode {
 pub enum ConnectionState {
     Connecting,
     Connected,
-    /// Connection failed; the string is a user-facing reason.
-    Failed(String),
+    /// All page connections failed; the UI renders a translated message.
+    Failed,
 }
 
 /// The complete application state.
@@ -55,6 +56,7 @@ pub struct App {
     pub selected_train_index: Option<usize>,
     pub selected_train_id: Option<String>,
     pub detail_scroll: u16,
+    pub lang: Lang,
 }
 
 impl App {
@@ -80,6 +82,7 @@ impl App {
             selected_train_index: None,
             selected_train_id: None,
             detail_scroll: 0,
+            lang: Lang::initial(),
         };
 
         const STATIONS_JSON: &str = include_str!("../stations.json");

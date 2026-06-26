@@ -7,12 +7,16 @@
 //! - [`app`]: application state, key-agnostic logic, and pure helpers.
 //! - [`ws`]: the background task that maintains the live connection.
 //! - [`ui`]: all rendering.
+//! - [`lang`]: German/English UI strings and the language toggle.
+//! - [`config`]: persisted settings (the chosen language).
 //!
 //! `main` owns terminal setup/teardown and the input/redraw event loop.
 
 #[macro_use]
 mod debug;
 mod app;
+mod config;
+mod lang;
 mod model;
 mod ui;
 mod ws;
@@ -131,6 +135,13 @@ async fn run(terminal: &mut Tui) -> Result<()> {
     Ok(())
 }
 
+/// Toggle the UI language and persist the choice for next launch.
+fn toggle_language(app: &mut App) {
+    app.lang = app.lang.toggle();
+    debug!("Language toggled to {}", app.lang.code());
+    config::save_language(app.lang);
+}
+
 /// Apply a single key press to the app state, sending a reconnect signal when a
 /// change requires re-fetching data. Returns `true` when the program should quit.
 async fn handle_key(app: &Arc<Mutex<App>>, reconnect_tx: &mpsc::Sender<()>, key: KeyEvent) -> bool {
@@ -174,6 +185,7 @@ async fn handle_key(app: &Arc<Mutex<App>>, reconnect_tx: &mpsc::Sender<()>, key:
                     app.mode = AppMode::TrainDetail;
                 }
             }
+            KeyCode::Char('l') | KeyCode::Char('L') => toggle_language(&mut app),
             KeyCode::Up => app.select_relative(-1),
             KeyCode::Down => app.select_relative(1),
             KeyCode::Enter => {
@@ -192,6 +204,7 @@ async fn handle_key(app: &Arc<Mutex<App>>, reconnect_tx: &mpsc::Sender<()>, key:
                 app.selected_train_id = None;
                 app.mode = AppMode::Normal;
             }
+            KeyCode::Char('l') | KeyCode::Char('L') => toggle_language(&mut app),
             KeyCode::Up => app.select_relative(-1),
             KeyCode::Down => app.select_relative(1),
             KeyCode::PageUp => {

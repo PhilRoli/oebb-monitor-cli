@@ -3,6 +3,7 @@
 //! [`ui`] dispatches to one of three screen renderers based on the current
 //! [`AppMode`]. Rendering is a pure function of [`App`] state; nothing here
 //! mutates application data beyond the list widget's own scroll/selection.
+//! All user-facing text comes from the active language's [`crate::lang::Tr`].
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -13,40 +14,6 @@ use ratatui::{
 };
 
 use crate::app::{calculate_delay, format_time, App, AppMode, ConnectionState, ContentType};
-
-/// Human-readable label for a notable wagon car type (e.g. night-train cars),
-/// or `None` for ordinary/unknown types.
-fn car_type_label(types: &[String]) -> Option<&'static str> {
-    types.iter().find_map(|t| match t.as_str() {
-        // Bed and fork/plate need a U+FE0F variation selector so they render
-        // full-width; the others are already emoji-presentation.
-        "sleeper" => Some("🛏️ Schlafwagen"),
-        "couchette" => Some("🛌 Liegewagen"),
-        "passenger" => Some("🪑 Sitzwagen"),
-        "car" => Some("🚗 Autotransport"),
-        "restaurant" => Some("🍽️ Restaurant"),
-        _ => None,
-    })
-}
-
-/// Decode the passenger class(es) from a wagon's `symbol` code, e.g.
-/// `W_1` → "1. Klasse", `W_1_B` → "1. Klasse + Business",
-/// `W_C_1` → "Comfort + 1. Klasse". Returns `None` for symbols that carry no
-/// class (locomotives, sleepers, couchettes, car-carriers — covered by `type`).
-fn class_label(symbol: &str) -> Option<String> {
-    let parts: Vec<&str> = symbol
-        .split('_')
-        .skip(1) // drop the vehicle prefix (W / TW / L)
-        .filter_map(|seg| match seg {
-            "1" => Some("1. Klasse"),
-            "2" => Some("2. Klasse"),
-            "B" => Some("Business"),
-            "C" => Some("Comfort"),
-            _ => None,
-        })
-        .collect();
-    (!parts.is_empty()).then(|| parts.join(" + "))
-}
 
 /// Map a delay (minutes) to its colour: green on time, yellow up to 5 min late,
 /// red beyond that.
@@ -72,6 +39,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 /// The main board: title, the departures/arrivals table, station notices,
 /// and a status line with connection state and key hints.
 fn render_main(f: &mut Frame, app: &mut App) {
+    let tr = app.lang.tr();
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -83,8 +52,8 @@ fn render_main(f: &mut Frame, app: &mut App) {
         .split(f.area());
 
     let title_text = match app.content_type {
-        ContentType::Departure => format!("🚂 ABFAHRTEN - {}", app.station_name),
-        ContentType::Arrival => format!("🚂 ANKÜNFTE - {}", app.station_name),
+        ContentType::Departure => format!("🚂 {} - {}", tr.departures, app.station_name),
+        ContentType::Arrival => format!("🚂 {} - {}", tr.arrivals, app.station_name),
     };
 
     let title = Paragraph::new(title_text)
@@ -99,19 +68,19 @@ fn render_main(f: &mut Frame, app: &mut App) {
 
     let header_cells: Vec<Cell> = [
         "#",
-        "ZEIT",
-        "IST",
-        "VERSP.",
-        "ZUG",
-        "LINIE",
+        tr.col_time,
+        tr.col_actual,
+        tr.col_delay,
+        tr.col_train,
+        tr.col_line,
         if app.content_type == ContentType::Departure {
-            "ZIEL"
+            tr.col_dest
         } else {
-            "VON"
+            tr.col_from
         },
-        "GLEIS",
-        "SEKTOR",
-        "BEMERKUNGEN",
+        tr.col_track,
+        tr.col_sector,
+        tr.col_remarks,
     ]
     .iter()
     .map(|h| {
@@ -224,7 +193,11 @@ fn render_main(f: &mut Frame, app: &mut App) {
         ],
     )
     .header(header)
-    .block(Block::default().borders(Borders::ALL).title("Züge"));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(tr.block_trains),
+    );
 
     f.render_widget(table, chunks[1]);
 
@@ -238,88 +211,70 @@ fn render_main(f: &mut Frame, app: &mut App) {
 
     let notices = Paragraph::new(notices_text)
         .style(Style::default().fg(Color::Yellow))
-        .block(Block::default().borders(Borders::ALL).title("Hinweise"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(tr.block_notices),
+        )
         .wrap(Wrap { trim: true });
     f.render_widget(notices, chunks[2]);
 
     let (update_text, update_color) = match &app.connection {
         ConnectionState::Connected => match app.last_update {
             Some(t) => (t.format("%H:%M:%S").to_string(), Color::White),
-            None => ("Verbunden".to_string(), Color::Green),
+            None => (tr.connected.to_string(), Color::Green),
         },
-        ConnectionState::Connecting => ("Verbinde...".to_string(), Color::Yellow),
-        ConnectionState::Failed(reason) => (format!("Fehler: {}", reason), Color::Red),
+        ConnectionState::Connecting => (tr.connecting.to_string(), Color::Yellow),
+        ConnectionState::Failed => (tr.connection_failed.to_string(), Color::Red),
     };
 
     let status_text = vec![Line::from(vec![
-        Span::styled("Letzte Aktualisierung: ", Style::default().fg(Color::Gray)),
+        Span::styled(tr.last_update, Style::default().fg(Color::Gray)),
         Span::styled(update_text, Style::default().fg(update_color)),
     ])];
 
-    let status =
-        Paragraph::new(status_text).block(Block::default().borders(Borders::ALL).title("Status"));
+    let status = Paragraph::new(status_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(tr.block_status),
+    );
     f.render_widget(status, chunks[3]);
 
-    let shortcuts_width = 56u16;
+    let shortcuts_width = 64u16;
     let shortcuts_x = chunks[3].x + chunks[3].width.saturating_sub(shortcuts_width + 2);
     let shortcuts_y = chunks[3].y + 1;
 
     if shortcuts_x > chunks[3].x {
+        let key = |s: &'static str| {
+            Span::styled(
+                s,
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )
+        };
         let shortcuts = Line::from(vec![
-            Span::styled(
-                "1-9,0",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            key("1-9,0"),
             Span::raw("/"),
-            Span::styled(
-                "↑↓",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            key("↑↓"),
             Span::raw("+"),
-            Span::styled(
-                "Enter",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" Detail "),
-            Span::styled(
-                "[A]",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("nk "),
-            Span::styled(
-                "[D]",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("ep "),
-            Span::styled(
-                "[S]",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("tn "),
-            Span::styled(
-                "[R]",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("ef "),
+            key("Enter"),
+            Span::raw(format!(" {} ", tr.detail)),
+            key("[A]"),
+            Span::raw(format!("{} ", tr.hint_arr)),
+            key("[D]"),
+            Span::raw(format!("{} ", tr.hint_dep)),
+            key("[S]"),
+            Span::raw(format!("{} ", tr.hint_stn)),
+            key("[R]"),
+            Span::raw(format!("{} ", tr.hint_ref)),
+            key("[L]"),
+            Span::raw(format!("{} ", tr.hint_lang)),
             Span::styled(
                 "[Q]",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
-            Span::raw("uit"),
+            Span::raw(tr.hint_quit),
         ]);
 
         let shortcuts_area = Rect {
@@ -336,6 +291,7 @@ fn render_main(f: &mut Frame, app: &mut App) {
 
 /// The centred station-picker popup: search field, filtered list, key hints.
 fn render_station_select(f: &mut Frame, app: &mut App) {
+    let tr = app.lang.tr();
     let area = f.area();
     let popup_area = centered_rect(60, 70, area);
 
@@ -349,12 +305,12 @@ fn render_station_select(f: &mut Frame, app: &mut App) {
         .split(popup_area);
 
     let block = Block::default()
-        .title("Station wählen")
+        .title(tr.select_station)
         .borders(Borders::ALL)
         .style(Style::default().bg(Color::Black));
     f.render_widget(block, popup_area);
 
-    let search_text = format!("Suche: {}_", app.station_search);
+    let search_text = format!("{}{}_", tr.search, app.station_search);
     let search = Paragraph::new(search_text)
         .style(Style::default().fg(Color::Yellow))
         .block(Block::default().borders(Borders::ALL));
@@ -369,12 +325,15 @@ fn render_station_select(f: &mut Frame, app: &mut App) {
 
     let list_title = if app.total_filtered_count > app.filtered_stations.len() {
         format!(
-            "Stationen ({} von {} angezeigt)",
+            "{} ({} {} {} {})",
+            tr.stations,
             app.filtered_stations.len(),
-            app.total_filtered_count
+            tr.of,
+            app.total_filtered_count,
+            tr.shown
         )
     } else {
-        format!("Stationen ({})", app.filtered_stations.len())
+        format!("{} ({})", tr.stations, app.filtered_stations.len())
     };
 
     let list = List::new(items)
@@ -388,7 +347,7 @@ fn render_station_select(f: &mut Frame, app: &mut App) {
 
     f.render_stateful_widget(list, chunks[1], &mut app.station_list_state);
 
-    let help = Paragraph::new("↑↓: Navigieren | Enter: Auswählen | Esc: Abbrechen")
+    let help = Paragraph::new(tr.station_help)
         .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center)
         .block(Block::default().borders(Borders::ALL));
@@ -398,6 +357,8 @@ fn render_station_select(f: &mut Frame, app: &mut App) {
 /// The centred detail popup for the selected train: timing, platform, operator,
 /// remarks, intermediate stops, and physical formation with amenities.
 fn render_train_detail(f: &mut Frame, app: &mut App) {
+    let tr = app.lang.tr();
+    let lang = app.lang;
     let area = f.area();
     let popup_area = centered_rect(80, 85, area);
 
@@ -429,7 +390,7 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
             .or(train.origin.as_ref())
             .map(|d| d.default.as_str())
             .unwrap_or("N/A");
-        let title_text = format!("🚂 Zug {} - {} → {}", train.train, line, dest);
+        let title_text = format!("🚂 {} {} - {} → {}", tr.train, train.train, line, dest);
         let title = Paragraph::new(title_text)
             .style(
                 Style::default()
@@ -442,33 +403,46 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
 
         let mut content_lines = Vec::new();
 
+        let sched_label = match app.content_type {
+            ContentType::Departure => tr.departure,
+            ContentType::Arrival => tr.arrival,
+        };
         content_lines.push(Line::from(vec![
-            Span::styled("Abfahrt: ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("{}: ", sched_label),
+                Style::default().fg(Color::Yellow),
+            ),
             Span::raw(format_time(&train.scheduled)),
         ]));
 
         if let Some(delay) = calculate_delay(train) {
             let delay_text = if delay > 0 {
-                format!("+{} Min", delay)
+                format!("+{} {}", delay, tr.min)
             } else {
-                format!("{} Min", delay)
+                format!("{} {}", delay, tr.min)
             };
             content_lines.push(Line::from(vec![
-                Span::styled("Verspätung: ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("{}: ", tr.delay),
+                    Style::default().fg(Color::Yellow),
+                ),
                 Span::styled(delay_text, Style::default().fg(delay_color(delay))),
             ]));
         }
 
         if let Some(track) = &train.track {
             content_lines.push(Line::from(vec![
-                Span::styled("Gleis: ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("{}: ", tr.track),
+                    Style::default().fg(Color::Yellow),
+                ),
                 Span::styled(track.clone(), Style::default().fg(Color::Magenta)),
                 Span::raw(" "),
                 Span::styled(
                     train
                         .sector
                         .as_ref()
-                        .map(|s| format!("Sektor {}", s))
+                        .map(|s| format!("{} {}", tr.sector, s))
                         .unwrap_or_default(),
                     Style::default().fg(Color::Magenta),
                 ),
@@ -477,7 +451,10 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
 
         if let Some(operator) = &train.operator {
             content_lines.push(Line::from(vec![
-                Span::styled("Betreiber: ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("{}: ", tr.operator),
+                    Style::default().fg(Color::Yellow),
+                ),
                 Span::raw(operator.clone()),
             ]));
         }
@@ -485,7 +462,7 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
         if let Some(remarks) = &train.remarks {
             if !remarks.is_empty() {
                 content_lines.push(Line::from(Span::styled(
-                    "Bemerkungen:",
+                    format!("{}:", tr.remarks),
                     Style::default().fg(Color::Yellow),
                 )));
                 for remark in remarks {
@@ -509,7 +486,7 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
         if let Some(prioritized) = &train.prioritized_vias {
             if !prioritized.is_empty() {
                 content_lines.push(Line::from(Span::styled(
-                    format!("Wichtige Halte: {}", prioritized.join(" ~ ")),
+                    format!("{}: {}", tr.major_stops, prioritized.join(" ~ ")),
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
@@ -527,7 +504,7 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
 
             if !stops.is_empty() {
                 content_lines.push(Line::from(Span::styled(
-                    "Alle Zwischenhalte:",
+                    format!("{}:", tr.all_stops),
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
@@ -541,7 +518,7 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
         if let Some(formation) = &train.formation {
             if !formation.is_empty() {
                 content_lines.push(Line::from(Span::styled(
-                    "Zugformation:",
+                    format!("{}:", tr.formation),
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
@@ -556,12 +533,12 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
                         || wagon.wagon_number.is_none();
                     let mut wagon_line = if is_locomotive {
                         vec![Span::styled(
-                            "  🚂 Lokomotive",
+                            format!("  🚂 {}", tr.locomotive),
                             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                         )]
                     } else {
                         vec![
-                            Span::raw("  Wagen "),
+                            Span::raw(format!("  {} ", tr.coach)),
                             Span::styled(
                                 wagon.wagon_number.as_deref().unwrap_or("?"),
                                 Style::default().fg(Color::Yellow),
@@ -570,16 +547,22 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
                     };
 
                     // Car type (sleeper / couchette / seated / restaurant) and
-                    // passenger class (1./2. Klasse, Business, Comfort) — most
+                    // passenger class (1./2. class, Business, Comfort) — most
                     // relevant for night and long-distance trains.
                     if !is_locomotive {
-                        if let Some(label) = wagon.car_type.as_deref().and_then(car_type_label) {
+                        if let Some(label) = wagon
+                            .car_type
+                            .as_deref()
+                            .and_then(|t| lang.car_type_label(t))
+                        {
                             wagon_line.push(Span::styled(
                                 format!(" {}", label),
                                 Style::default().fg(Color::Blue),
                             ));
                         }
-                        if let Some(class) = wagon.symbol.as_deref().and_then(class_label) {
+                        if let Some(class) =
+                            wagon.symbol.as_deref().and_then(|s| lang.class_label(s))
+                        {
                             wagon_line.push(Span::styled(
                                 format!(" · {}", class),
                                 Style::default().fg(Color::Green),
@@ -589,14 +572,14 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
 
                     if wagon.closed == Some(true) {
                         wagon_line.push(Span::styled(
-                            " (geschlossen)",
+                            format!(" {}", tr.closed),
                             Style::default().fg(Color::DarkGray),
                         ));
                     }
 
                     if let Some(sector) = &wagon.sector {
                         wagon_line.push(Span::styled(
-                            format!(" [Sektor {}]", sector),
+                            format!(" [{} {}]", tr.sector, sector),
                             Style::default().fg(Color::Magenta),
                         ));
                     }
@@ -614,21 +597,8 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
                     }
 
                     if let Some(icons) = &wagon.icons {
-                        let icon_strs: Vec<String> = icons
-                            .iter()
-                            .map(|icon| {
-                                match icon.as_str() {
-                                    "wlan" => "📶 WLAN",
-                                    "bicycle" => "🚲 Fahrrad",
-                                    "disabled" => "♿ Rollstuhl",
-                                    "bistro" => "🍽️ Bistro",
-                                    "motherchild" => "👪 Familie",
-                                    "silence" => "🔇 Ruhe",
-                                    _ => icon.as_str(),
-                                }
-                                .to_string()
-                            })
-                            .collect();
+                        let icon_strs: Vec<String> =
+                            icons.iter().map(|icon| lang.icon_label(icon)).collect();
                         wagon_line.push(Span::styled(
                             icon_strs.join(" | "),
                             Style::default().fg(Color::Green),
@@ -641,18 +611,18 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
         }
 
         let content = Paragraph::new(content_lines)
-            .block(Block::default().borders(Borders::ALL).title("Details"))
+            .block(Block::default().borders(Borders::ALL).title(tr.details))
             .wrap(Wrap { trim: true })
             .scroll((app.detail_scroll, 0));
         f.render_widget(content, chunks[1]);
 
-        let help = Paragraph::new("↑↓: Züge | PgUp/PgDn: Scrollen | Esc/Q: Schließen")
+        let help = Paragraph::new(tr.detail_help)
             .style(Style::default().fg(Color::Gray))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(help, chunks[2]);
     } else {
-        let msg = Paragraph::new("Kein Zug ausgewählt")
+        let msg = Paragraph::new(tr.no_train)
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(msg, popup_area);
@@ -692,28 +662,5 @@ mod tests {
         assert_eq!(delay_color(3), Color::Yellow);
         assert_eq!(delay_color(5), Color::Yellow);
         assert_eq!(delay_color(6), Color::Red);
-    }
-
-    #[test]
-    fn car_types() {
-        let t = |s: &str| car_type_label(&[s.to_string()]);
-        assert_eq!(t("sleeper"), Some("🛏️ Schlafwagen"));
-        assert_eq!(t("restaurant"), Some("🍽️ Restaurant"));
-        assert_eq!(t("car"), Some("🚗 Autotransport"));
-        assert_eq!(t("unknown"), None);
-    }
-
-    #[test]
-    fn class_labels() {
-        assert_eq!(class_label("W_1").as_deref(), Some("1. Klasse"));
-        assert_eq!(class_label("W_2").as_deref(), Some("2. Klasse"));
-        assert_eq!(class_label("W_1_B").as_deref(), Some("1. Klasse + Business"));
-        assert_eq!(class_label("W_C_1").as_deref(), Some("Comfort + 1. Klasse"));
-        assert_eq!(class_label("TW_B_1").as_deref(), Some("Business + 1. Klasse"));
-        // Restaurant section (S) carries no passenger class of its own.
-        assert_eq!(class_label("W_1_S").as_deref(), Some("1. Klasse"));
-        // Sleepers/couchettes/locos have no class code.
-        assert_eq!(class_label("W_Schlaf"), None);
-        assert_eq!(class_label("L_L"), None);
     }
 }
