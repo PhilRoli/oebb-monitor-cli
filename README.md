@@ -82,7 +82,16 @@ The log captures WebSocket events, reconnect signals, item merges, and key input
 
 ## Architecture
 
-Single-binary Rust application (~1100 lines, `src/main.rs`).
+Single-binary Rust application, split into focused modules under `src/`:
+
+| Module | Responsibility |
+| --- | --- |
+| `main.rs` | Terminal setup/teardown, input + redraw event loop |
+| `app.rs` | Application state and pure helpers (with unit tests) |
+| `model.rs` | Serde types for the WebSocket JSON payloads |
+| `ws.rs` | Background task maintaining the live connection |
+| `ui.rs` | All terminal rendering |
+| `debug.rs` | Opt-in file logger and the `debug!` macro |
 
 | Crate | Version | Purpose |
 | --- | --- | --- |
