@@ -18,13 +18,12 @@ use serde::Deserialize;
 use std::{
     collections::HashMap,
     io::{self, Write},
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
-// Debug logger
 struct DebugLogger {
     enabled: bool,
     file: Option<std::sync::Mutex<std::fs::File>>,
@@ -56,12 +55,10 @@ impl DebugLogger {
     }
 }
 
-lazy_static::lazy_static! {
-    static ref DEBUG: DebugLogger = {
-        let enabled = std::env::args().any(|arg| arg == "--debug" || arg == "-d");
-        DebugLogger::new(enabled)
-    };
-}
+static DEBUG: LazyLock<DebugLogger> = LazyLock::new(|| {
+    let enabled = std::env::args().any(|arg| arg == "--debug" || arg == "-d");
+    DebugLogger::new(enabled)
+});
 
 macro_rules! debug {
     ($($arg:tt)*) => {
@@ -108,10 +105,8 @@ struct Remark {
     text: Destination,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct SpecialNotice {
-    text: Destination,
-}
+// SpecialNotice and Remark have identical shapes
+type SpecialNotice = Remark;
 
 #[derive(Debug, Clone, Deserialize)]
 struct TrainData {
@@ -154,11 +149,15 @@ struct App {
     last_update: Option<DateTime<Local>>,
     mode: AppMode,
     stations: HashMap<String, String>,
+    all_stations_sorted: Vec<(String, String)>,
     filtered_stations: Vec<(String, String)>,
+    total_filtered_count: usize,
     station_search: String,
     station_list_state: ListState,
     max_pages: usize,
     selected_train_index: Option<usize>,
+    selected_train_id: Option<String>,
+    detail_scroll: u16,
 }
 
 impl App {
@@ -172,18 +171,20 @@ impl App {
             last_update: None,
             mode: AppMode::Normal,
             stations: HashMap::new(),
+            all_stations_sorted: Vec::new(),
             filtered_stations: Vec::new(),
+            total_filtered_count: 0,
             station_search: String::new(),
             station_list_state: ListState::default(),
             max_pages: 5,
             selected_train_index: None,
+            selected_train_id: None,
+            detail_scroll: 0,
         };
 
-        // Load stations from embedded JSON
         const STATIONS_JSON: &str = include_str!("../stations.json");
 
         if let Ok(stations) = serde_json::from_str::<HashMap<String, String>>(STATIONS_JSON) {
-            // Trim whitespace from station IDs
             app.stations = stations
                 .into_iter()
                 .map(|(k, v)| (k.trim().to_string(), v))
@@ -192,6 +193,14 @@ impl App {
         } else {
             debug!("Failed to parse embedded stations.json");
         }
+
+        let mut sorted: Vec<(String, String)> = app
+            .stations
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        sorted.sort_by(|a, b| a.1.cmp(&b.1));
+        app.all_stations_sorted = sorted;
 
         app
     }
@@ -209,23 +218,22 @@ impl App {
 
     fn update_filtered_stations(&mut self) {
         if self.station_search.is_empty() {
-            self.filtered_stations = self
-                .stations
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
+            self.total_filtered_count = self.all_stations_sorted.len();
+            let take = self.all_stations_sorted.len().min(20);
+            self.filtered_stations = self.all_stations_sorted[..take].to_vec();
         } else {
             let search_lower = self.station_search.to_lowercase();
-            self.filtered_stations = self
+            let mut matches: Vec<(String, String)> = self
                 .stations
                 .iter()
                 .filter(|(_, name)| name.to_lowercase().contains(&search_lower))
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
+            matches.sort_by(|a, b| a.1.cmp(&b.1));
+            self.total_filtered_count = matches.len();
+            matches.truncate(20);
+            self.filtered_stations = matches;
         }
-
-        self.filtered_stations.sort_by(|a, b| a.1.cmp(&b.1));
-        self.filtered_stations.truncate(20);
 
         if !self.filtered_stations.is_empty() {
             self.station_list_state.select(Some(0));
@@ -236,7 +244,7 @@ impl App {
         if let Some(selected) = self.station_list_state.selected() {
             if selected < self.filtered_stations.len() {
                 let (id, name) = &self.filtered_stations[selected];
-                self.station_id = id.trim().to_string();
+                self.station_id = id.clone();
                 self.station_name = name.clone();
                 self.exit_station_select();
                 return true;
@@ -290,7 +298,6 @@ async fn run_websocket(app: Arc<Mutex<App>>, mut reconnect_rx: mpsc::Receiver<()
         iteration += 1;
         debug!("=== WebSocket iteration {} ===", iteration);
 
-        // Abort all existing tasks
         debug!("Aborting {} existing tasks", active_tasks.len());
         for task in active_tasks.drain(..) {
             task.abort();
@@ -301,6 +308,7 @@ async fn run_websocket(app: Arc<Mutex<App>>, mut reconnect_rx: mpsc::Receiver<()
             debug!("Clearing {} items", app_guard.items.len());
             app_guard.items.clear();
             app_guard.selected_train_index = None;
+            app_guard.selected_train_id = None;
             app_guard.last_update = None;
             let pages = app_guard.max_pages;
             let sid = app_guard.station_id.clone();
@@ -313,10 +321,8 @@ async fn run_websocket(app: Arc<Mutex<App>>, mut reconnect_rx: mpsc::Receiver<()
             station_id, content_type, max_pages
         );
 
-        // Create channel for page updates
         let (page_tx, mut page_rx) = mpsc::channel(100);
 
-        // Spawn tasks for each page
         for page in 1..=max_pages {
             let url = {
                 let app = app.lock().await;
@@ -388,7 +394,6 @@ async fn run_websocket(app: Arc<Mutex<App>>, mut reconnect_rx: mpsc::Receiver<()
             active_tasks.len()
         );
 
-        // Process updates or wait for reconnect signal
         let mut update_count = 0;
         loop {
             tokio::select! {
@@ -400,35 +405,35 @@ async fn run_websocket(app: Arc<Mutex<App>>, mut reconnect_rx: mpsc::Receiver<()
 
                             let mut app = app.lock().await;
 
-                            if app.mode == AppMode::Normal {
-                                let new_items = match app.content_type {
-                                    ContentType::Departure => params.data.departures.unwrap_or_default(),
-                                    ContentType::Arrival => params.data.arrivals.unwrap_or_default(),
-                                };
+                            let new_items = match app.content_type {
+                                ContentType::Departure => params.data.departures.unwrap_or_default(),
+                                ContentType::Arrival => params.data.arrivals.unwrap_or_default(),
+                            };
 
-                                debug!("Page {} has {} items", page, new_items.len());
+                            debug!("Page {} has {} items", page, new_items.len());
 
-                                let before_count = app.items.len();
-                                // Merge items, avoiding duplicates
-                                for item in new_items {
-                                    if !app.items.iter().any(|i| i.id == item.id) {
-                                        app.items.push(item);
-                                    }
+                            let before_count = app.items.len();
+                            for item in new_items {
+                                if !app.items.iter().any(|i| i.id == item.id) {
+                                    app.items.push(item);
                                 }
-                                let after_count = app.items.len();
-                                debug!("Merged items: {} -> {} (added {})", before_count, after_count, after_count - before_count);
-
-                                // Sort by scheduled time
-                                app.items.sort_by(|a, b| a.scheduled.cmp(&b.scheduled));
-
-                                if let Some(notices) = params.data.special_notices {
-                                    debug!("Updated special notices: {}", notices.len());
-                                    app.special_notices = notices;
-                                }
-                                app.last_update = Some(Local::now());
-                            } else {
-                                debug!("Skipping update, app in {:?} mode", app.mode);
                             }
+                            let after_count = app.items.len();
+                            debug!("Merged items: {} -> {} (added {})", before_count, after_count, after_count - before_count);
+
+                            app.items.sort_by(|a, b| a.scheduled.cmp(&b.scheduled));
+
+                            // Re-sync selected index from ID after sort, so detail view
+                            // tracks the right train even as items shift position
+                            if let Some(id) = app.selected_train_id.clone() {
+                                app.selected_train_index = app.items.iter().position(|i| i.id == id);
+                            }
+
+                            if let Some(notices) = params.data.special_notices {
+                                debug!("Updated special notices: {}", notices.len());
+                                app.special_notices = notices;
+                            }
+                            app.last_update = Some(Local::now());
                         }
                         None => {
                             debug!("All page channels closed after {} updates, will reconnect", update_count);
@@ -563,10 +568,10 @@ fn render_main(f: &mut Frame, app: &mut App) {
             .map(|r| r.text.default.clone())
             .unwrap_or_default();
 
-        let number_str = if idx < 9 {
-            format!("{}", idx + 1)
-        } else {
-            " ".to_string()
+        let number_str = match idx {
+            0..=8 => format!("{}", idx + 1),
+            9 => "0".to_string(),
+            _ => " ".to_string(),
         };
         let is_selected = app.selected_train_index == Some(idx);
 
@@ -652,29 +657,28 @@ fn render_main(f: &mut Frame, app: &mut App) {
         .wrap(Wrap { trim: true });
     f.render_widget(notices, chunks[2]);
 
+    let (update_text, update_color) = match app.last_update {
+        Some(t) => (t.format("%H:%M:%S").to_string(), Color::White),
+        None => ("Verbinde...".to_string(), Color::Yellow),
+    };
+
     let status_text = vec![Line::from(vec![
         Span::styled("Letzte Aktualisierung: ", Style::default().fg(Color::Gray)),
-        Span::styled(
-            app.last_update
-                .map(|t| t.format("%H:%M:%S").to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            Style::default().fg(Color::White),
-        ),
+        Span::styled(update_text, Style::default().fg(update_color)),
     ])];
 
     let status =
         Paragraph::new(status_text).block(Block::default().borders(Borders::ALL).title("Status"));
     f.render_widget(status, chunks[3]);
 
-    // Render keyboard shortcuts right-aligned in the status bar
-    let shortcuts_width = 45; // Approximate width of the shortcuts text
+    let shortcuts_width = 56u16;
     let shortcuts_x = chunks[3].x + chunks[3].width.saturating_sub(shortcuts_width + 2);
     let shortcuts_y = chunks[3].y + 1;
 
     if shortcuts_x > chunks[3].x {
         let shortcuts = Line::from(vec![
             Span::styled(
-                "1-9",
+                "1-9,0",
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
@@ -693,7 +697,7 @@ fn render_main(f: &mut Frame, app: &mut App) {
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" Info "),
+            Span::raw(" Detail "),
             Span::styled(
                 "[A]",
                 Style::default()
@@ -715,6 +719,13 @@ fn render_main(f: &mut Frame, app: &mut App) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("tn "),
+            Span::styled(
+                "[R]",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("ef "),
             Span::styled(
                 "[Q]",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
@@ -766,11 +777,18 @@ fn render_station_select(f: &mut Frame, app: &mut App) {
         .map(|(i, (_, name))| ListItem::new(format!("{:2}. {}", i + 1, name)))
         .collect();
 
+    let list_title = if app.total_filtered_count > app.filtered_stations.len() {
+        format!(
+            "Stationen ({} von {} angezeigt)",
+            app.filtered_stations.len(),
+            app.total_filtered_count
+        )
+    } else {
+        format!("Stationen ({})", app.filtered_stations.len())
+    };
+
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(format!(
-            "Gefundene Stationen ({})",
-            app.filtered_stations.len()
-        )))
+        .block(Block::default().borders(Borders::ALL).title(list_title))
         .highlight_style(
             Style::default()
                 .bg(Color::DarkGray)
@@ -797,19 +815,17 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(5),    // Content
-                Constraint::Length(3), // Help
+                Constraint::Length(3),
+                Constraint::Min(5),
+                Constraint::Length(3),
             ])
             .split(popup_area);
 
-        // Background block
         let block = Block::default()
             .borders(Borders::ALL)
             .style(Style::default().bg(Color::Black));
         f.render_widget(block, popup_area);
 
-        // Title
         let title_text = format!(
             "🚂 Zug {} - {} → {}",
             train.train,
@@ -835,10 +851,8 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(title, chunks[0]);
 
-        // Content
         let mut content_lines = Vec::new();
 
-        // Basic info
         content_lines.push(Line::from(vec![
             Span::styled("Abfahrt: ", Style::default().fg(Color::Yellow)),
             Span::raw(format_time(&train.scheduled)),
@@ -888,9 +902,7 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
 
         content_lines.push(Line::from(""));
 
-        // Via stations
         if let Some(via) = &train.via {
-            // Show prioritized vias if available
             if let Some(prioritized) = &train.prioritized_vias {
                 if !prioritized.is_empty() {
                     content_lines.push(Line::from(Span::styled(
@@ -909,7 +921,6 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
                     .add_modifier(Modifier::BOLD),
             )));
 
-            // Split by ~ and wrap
             let stations: Vec<&str> = via.default.split("~").collect();
             let mut current_line = String::new();
 
@@ -940,7 +951,6 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
 
         content_lines.push(Line::from(""));
 
-        // Formation
         if let Some(formation) = &train.formation {
             if !formation.is_empty() {
                 content_lines.push(Line::from(Span::styled(
@@ -961,15 +971,12 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
                         vec![
                             Span::raw("  Wagen "),
                             Span::styled(
-                                wagon
-                                    .wagon_number.as_deref()
-                                    .unwrap_or("?"),
+                                wagon.wagon_number.as_deref().unwrap_or("?"),
                                 Style::default().fg(Color::Yellow),
                             ),
                         ]
                     };
 
-                    // Add sector and destination if available
                     if let Some(sector) = &wagon.sector {
                         wagon_line.push(Span::styled(
                             format!(" [Sektor {}]", sector),
@@ -1018,17 +1025,16 @@ fn render_train_detail(f: &mut Frame, app: &mut App) {
 
         let content = Paragraph::new(content_lines)
             .block(Block::default().borders(Borders::ALL).title("Details"))
-            .wrap(Wrap { trim: true });
+            .wrap(Wrap { trim: true })
+            .scroll((app.detail_scroll, 0));
         f.render_widget(content, chunks[1]);
 
-        // Help
-        let help = Paragraph::new("Esc: Schließen")
+        let help = Paragraph::new("↑↓: Züge | PgUp/PgDn: Scrollen | Esc/Q: Schließen")
             .style(Style::default().fg(Color::Gray))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(help, chunks[2]);
     } else {
-        // No train selected
         let msg = Paragraph::new("Kein Zug ausgewählt")
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
@@ -1060,6 +1066,13 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 async fn main() -> Result<()> {
     debug!("Application starting");
     debug!("Debug mode: {}", DEBUG.enabled);
+
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        original_hook(info);
+    }));
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -1104,7 +1117,6 @@ async fn main() -> Result<()> {
                             debug!("Switching to Arrivals");
                             app.content_type = ContentType::Arrival;
                             drop(app);
-                            debug!("Sending reconnect signal...");
                             let result = reconnect_tx.send(()).await;
                             debug!("Reconnect signal sent: {:?}", result);
                         }
@@ -1112,7 +1124,6 @@ async fn main() -> Result<()> {
                             debug!("Switching to Departures");
                             app.content_type = ContentType::Departure;
                             drop(app);
-                            debug!("Sending reconnect signal...");
                             let result = reconnect_tx.send(()).await;
                             debug!("Reconnect signal sent: {:?}", result);
                         }
@@ -1120,12 +1131,21 @@ async fn main() -> Result<()> {
                             debug!("Entering station select mode");
                             app.enter_station_select();
                         }
+                        KeyCode::Char('r') | KeyCode::Char('R') => {
+                            debug!("Manual refresh requested");
+                            drop(app);
+                            let result = reconnect_tx.send(()).await;
+                            debug!("Reconnect signal sent: {:?}", result);
+                        }
                         KeyCode::Char(c) if c.is_ascii_digit() => {
                             let digit = c.to_digit(10).unwrap() as usize;
                             let index = if digit == 0 { 9 } else { digit - 1 };
                             if index < app.items.len() {
                                 debug!("Selecting train at index {}", index);
                                 app.selected_train_index = Some(index);
+                                app.selected_train_id =
+                                    app.items.get(index).map(|t| t.id.clone());
+                                app.detail_scroll = 0;
                                 app.mode = AppMode::TrainDetail;
                             }
                         }
@@ -1148,8 +1168,11 @@ async fn main() -> Result<()> {
                             }
                         }
                         KeyCode::Enter => {
-                            if app.selected_train_index.is_some() {
+                            if let Some(idx) = app.selected_train_index {
                                 debug!("Opening train detail");
+                                app.selected_train_id =
+                                    app.items.get(idx).map(|t| t.id.clone());
+                                app.detail_scroll = 0;
                                 app.mode = AppMode::TrainDetail;
                             }
                         }
@@ -1158,21 +1181,36 @@ async fn main() -> Result<()> {
                     AppMode::TrainDetail => match key.code {
                         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                             debug!("Closing train detail");
+                            app.selected_train_id = None;
                             app.mode = AppMode::Normal;
                         }
                         KeyCode::Up => {
                             if let Some(idx) = app.selected_train_index {
                                 if idx > 0 {
-                                    app.selected_train_index = Some(idx - 1);
+                                    let new_idx = idx - 1;
+                                    app.selected_train_index = Some(new_idx);
+                                    app.selected_train_id =
+                                        app.items.get(new_idx).map(|t| t.id.clone());
+                                    app.detail_scroll = 0;
                                 }
                             }
                         }
                         KeyCode::Down => {
                             if let Some(idx) = app.selected_train_index {
                                 if idx + 1 < app.items.len() {
-                                    app.selected_train_index = Some(idx + 1);
+                                    let new_idx = idx + 1;
+                                    app.selected_train_index = Some(new_idx);
+                                    app.selected_train_id =
+                                        app.items.get(new_idx).map(|t| t.id.clone());
+                                    app.detail_scroll = 0;
                                 }
                             }
+                        }
+                        KeyCode::PageUp => {
+                            app.detail_scroll = app.detail_scroll.saturating_sub(3);
+                        }
+                        KeyCode::PageDown => {
+                            app.detail_scroll = app.detail_scroll.saturating_add(3);
                         }
                         _ => {}
                     },
@@ -1186,7 +1224,6 @@ async fn main() -> Result<()> {
                             if app.select_station() {
                                 debug!("Station changed: {} -> {}", before_station, app.station_id);
                                 drop(app);
-                                debug!("Sending reconnect signal...");
                                 let result = reconnect_tx.send(()).await;
                                 debug!("Reconnect signal sent: {:?}", result);
                             }
