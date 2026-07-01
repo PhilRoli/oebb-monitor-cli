@@ -7,7 +7,7 @@ Terminal UI for live ÖBB (Austrian Federal Railways) departure and arrival data
 ### Homebrew
 
 ```bash
-brew tap philroli/oebb-monitor
+brew tap philroli/tap
 brew install oebb-monitor
 ```
 
