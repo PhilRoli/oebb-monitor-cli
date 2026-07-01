@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: ${{ github.repository_owner }}/homebrew-oebb-monitor
+          repository: ${{ github.repository_owner }}/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: Update formula
